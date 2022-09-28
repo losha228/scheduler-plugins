@@ -26,8 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
-
-	"sigs.k8s.io/scheduler-plugins/apis/scheduling"
 )
 
 // SonicScheduling is a plugin that inject sonice device precheck/postcheck and device lock logic during creating pod.
@@ -69,10 +67,9 @@ func New(obj runtime.Object, handle framework.Handle) (framework.Plugin, error) 
 func (ss *SonicScheduling) EventsToRegister() []framework.ClusterEvent {
 	// To register a custom event, follow the naming convention at:
 	// https://git.k8s.io/kubernetes/pkg/scheduler/eventhandlers.go#L403-L410
-	pgGVK := fmt.Sprintf("podgroups.v1alpha1.%v", scheduling.GroupName)
 	return []framework.ClusterEvent{
-		{Resource: framework.Pod, ActionType: framework.Add},
-		{Resource: framework.GVK(pgGVK), ActionType: framework.Add | framework.Update},
+		{Resource: framework.Pod, ActionType: framework.Delete | framework.Update},
+		{Resource: framework.Node, ActionType: framework.Delete | framework.Update},
 	}
 }
 
