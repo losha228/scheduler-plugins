@@ -17,6 +17,7 @@ limitations under the License.
 package sonic
 
 import (
+	"strings"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -34,4 +35,14 @@ func GetPodLabel(pod *v1.Pod, label_name string) string {
 // GetPodGroupLabel get pod group from pod annotations
 func GetSchedulerName(pod *v1.Pod) string {
 	return pod.Spec.SchedulerName
+}
+
+// GetPodGroupLabel get pod group from pod annotations
+func GetAnnotationByName(pod *v1.Pod, key string) string {
+	for k, v := range pod.ObjectMeta.Annotations {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
 }
