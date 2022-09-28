@@ -23,9 +23,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	appInformerv1 "k8s.io/client-go/informers/app/v1"
 	informerv1 "k8s.io/client-go/informers/core/v1"
-	appListerv1 "k8s.io/client-go/listers/app/v1"
 	listerv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -47,8 +45,6 @@ type PodManager struct {
 	scheduleTimeout *time.Duration
 	// podLister is pod lister
 	podLister listerv1.PodLister
-	// podLister is pod lister
-	dsLister appListerv1.PodLister
 	// reserveResourcePercentage is the reserved resource for the max finished group, range (0,100]
 	reserveResourcePercentage int32
 	sync.RWMutex
@@ -56,17 +52,16 @@ type PodManager struct {
 
 // NewPodGroupManager creates a new operation object.
 func NewPodManager(snapshotSharedLister framework.SharedLister, scheduleTimeout *time.Duration,
-	podInformer informerv1.PodInformer, dsInformer appInformerv1.DaemonSetInformer) *PodManager {
+	podInformer informerv1.PodInformer) *PodManager {
 	podMgr := &PodManager{
 		snapshotSharedLister: snapshotSharedLister,
 		scheduleTimeout:      scheduleTimeout,
 		podLister:            podInformer.Lister(),
-		dsLister:             dsInformer.Lister(),
 	}
 	return podMgr
 }
 
-// GetNamespacedName returns the namespaced name.
+// Get pod count for test.
 func (pm *PodManager) GetPodCount(ns string) int {
 	pods, err := pm.podLister.Pods(ns).List(
 		labels.SelectorFromSet(labels.Set{"test": "liveness"}),

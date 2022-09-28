@@ -54,10 +54,9 @@ const (
 func New(obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 
 	podInformer := handle.SharedInformerFactory().Core().V1().Pods()
-	dsInformer := handle.SharedInformerFactory().Apps().V1().DaemonSets()
 	scheduleTimeDuration := time.Duration(10) * time.Second
 
-	podMgr := NewPodManager(handle.SnapshotSharedLister(), &scheduleTimeDuration, podInformer, dsInformer)
+	podMgr := NewPodManager(handle.SnapshotSharedLister(), &scheduleTimeDuration, podInformer)
 	plugin := &SonicScheduling{
 		frameworkHandler: handle,
 		podMgr:           podMgr,
