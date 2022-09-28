@@ -118,7 +118,7 @@ func (ss *SonicScheduling) Permit(ctx context.Context, state *framework.CycleSta
 	var retStatus *framework.Status
 
 	retStatus = framework.NewStatus(framework.Success, "")
-	waitTime = 0
+	waitTime = 10
 	ss.log("Permit", "Permit is called for pod for precheck", pod, nodeName)
 	value := GetAnnotationByName(pod, "Permit")
 
