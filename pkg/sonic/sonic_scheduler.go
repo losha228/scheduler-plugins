@@ -166,16 +166,24 @@ func (ss *SonicScheduling) PreBind(ctx context.Context, state *framework.CycleSt
 // PostBind is called after a pod is successfully bound.
 func (ss *SonicScheduling) PostBind(ctx context.Context, _ *framework.CycleState, pod *v1.Pod, nodeName string) {
 	ss.log("PostBind", "pod post-upgrade: release device lock", pod, nodeName)
+
 	// add tag in annotations
-	podCopy := pod.DeepCopy()
-	podCopy.Annotations["PostCheckNeeded"] = "true"
-	ss.log("PostBind", fmt.Sprintf("add PostCheckNeeded tag for pod %v, uid: %v", pod.Spec.NodeName, pod.UID), pod, nodeName)
-	_, err := ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Update(ctx, podCopy, metav1.UpdateOptions{})
+	newPod, err := ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
 	if err != nil {
-		ss.log("PostBind", fmt.Sprintf("Failed to add PostCheckNeeded tag for pod %v, error: %v", pod.Spec.NodeName, err), pod, nodeName)
+		ss.log("PostBind", fmt.Sprintf("Node %v not found, error: %v", pod.Name, err), pod, nodeName)
+		return
 	}
+
+	// update annotations
+	newPod.Annotations["PostCheckNeeded"] = "true"
+	ss.log("PostBind", fmt.Sprintf("Add PostCheckNeeded tag for pod %v, uid: %v", newPod.Name, newPod.UID), newPod, nodeName)
+	_, err = ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Update(ctx, newPod, metav1.UpdateOptions{})
+	if err != nil {
+		ss.log("PostBind", fmt.Sprintf("Failed to add PostCheckNeeded tag for pod %v, error: %v", newPod.Name, err), pod, nodeName)
+	}
+
 	// try to emit an event
-	ss.frameworkHandler.EventRecorder().Eventf(podCopy, nil, v1.EventTypeNormal, "reason=test update", "Update", "note=test")
+	ss.frameworkHandler.EventRecorder().Eventf(newPod, nil, v1.EventTypeNormal, "reason=test update", "Update", "note=test")
 }
 
 func (ss *SonicScheduling) log(method, msg string, pod *v1.Pod, nodeName string) {
