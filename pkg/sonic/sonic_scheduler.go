@@ -169,11 +169,13 @@ func (ss *SonicScheduling) PostBind(ctx context.Context, _ *framework.CycleState
 	// add tag in annotations
 	podCopy := pod.DeepCopy()
 	podCopy.Annotations["PostCheckNeeded"] = "true"
-	ss.log("PostBind", "add PostCheckNeeded tag", pod, nodeName)
-	ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Update(ctx, podCopy, metav1.UpdateOptions{})
-
+	ss.log("PostBind", fmt.Sprintf("add PostCheckNeeded tag for pod %v, uid: %v", pod.Spec.NodeName, pod.UID), pod, nodeName)
+	_, err := ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Update(ctx, podCopy, metav1.UpdateOptions{})
+	if err != nil {
+		ss.log("PostBind", fmt.Sprintf("Failed to add PostCheckNeeded tag for pod %v, error: %v", pod.Spec.NodeName, err), pod, nodeName)
+	}
 	// try to emit an event
-	ss.frameworkHandler.EventRecorder().Eventf(podCopy, nil, v1.EventTypeNormal, "reason=test", "action=test", "note=test")
+	ss.frameworkHandler.EventRecorder().Eventf(podCopy, nil, v1.EventTypeNormal, "reason=test update", "Update", "note=test")
 }
 
 func (ss *SonicScheduling) log(method, msg string, pod *v1.Pod, nodeName string) {
