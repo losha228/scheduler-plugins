@@ -20,16 +20,20 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	appsinformer "k8s.io/client-go/informers/apps/v1"
 	coreinformer "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
+	appslister "k8s.io/client-go/listers/apps/v1"
 	corelister "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -42,14 +46,24 @@ import (
 type SonicDeamonsetController struct {
 	podQueue        workqueue.RateLimitingInterface
 	podLister       corelister.PodLister
-	pgListerSynced  cache.InformerSynced
 	podListerSynced cache.InformerSynced
+	dpLister        appslister.DeploymentLister
+	dpListerSynced  cache.InformerSynced
 	kubeClient      kubernetes.Interface
 }
 
+const (
+	PostCheckDoneTag   = "PostCheckDone"
+	PostCheckNeededTag = "PostCheckNeeded"
+	// PausedDeployReason is added in a deployment when it is paused. Lack of progress shouldn't be
+	// estimated once a deployment is paused.
+	PausedDeployReason = "DeploymentPaused"
+)
+
 // NewSonicDeamonsetController returns a new *SonicDeamonsetController
 func NewSonicDeamonsetController(client kubernetes.Interface,
-	podInformer coreinformer.PodInformer) *SonicDeamonsetController {
+	podInformer coreinformer.PodInformer,
+	dpInformer appsinformer.DeploymentInformer) *SonicDeamonsetController {
 
 	ctrl := &SonicDeamonsetController{
 		podQueue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "PodWork"),
@@ -63,6 +77,8 @@ func NewSonicDeamonsetController(client kubernetes.Interface,
 	ctrl.kubeClient = client
 	ctrl.podLister = podInformer.Lister()
 	ctrl.podListerSynced = podInformer.Informer().HasSynced
+	ctrl.dpLister = dpInformer.Lister()
+	ctrl.dpListerSynced = dpInformer.Informer().HasSynced
 	return ctrl
 }
 
@@ -97,14 +113,17 @@ func (ctrl *SonicDeamonsetController) podAdded(obj interface{}) {
 
 	ctrl.log("podAdded", fmt.Sprintf("PodCreate event got: pod %v in namespace %v is added", pod.Name, pod.Namespace), pod)
 	// check post check tag
-	_, found := pod.Annotations["PostCheckNeeded"]
-	if !found {
-		ctrl.log("podAdded", fmt.Sprintf("pod %v in namespace %v has no PostCheckNeeded tag", pod.Name, pod.Namespace), pod)
+	_, postCheckNeedfound := pod.Annotations[PostCheckNeededTag]
+	_, postCheckDonefound := pod.Annotations[PostCheckDoneTag]
+	if postCheckDonefound || !postCheckNeedfound {
+		ctrl.log("podAdded", fmt.Sprintf("Ignore pod %v in namespace %v because either PostCheck was done or no PostCheckNeeded", pod.Name, pod.Namespace), pod)
 		return
-	} else {
-		ctrl.log("podAdded", fmt.Sprintf("Enqueue %v", key), pod)
-		ctrl.podQueue.Add(key)
 	}
+
+	ctrl.log("podAdded", fmt.Sprintf("pod %v in namespace %v, postCheckDonefound=%v, postCheckNeedfound=%v", pod.Name, pod.Namespace, postCheckDonefound, postCheckNeedfound), pod)
+	ctrl.log("podAdded", fmt.Sprintf("Enqueue %v", key), pod)
+	ctrl.podQueue.Add(key)
+
 	klog.V(5).InfoS("Add pod group when pod gets added", "podGroup", klog.KObj(pod), "pod", klog.KObj(pod))
 }
 
@@ -168,6 +187,20 @@ func (ctrl *SonicDeamonsetController) syncHandler(key string) error {
 
 	ctrl.log("syncHandler", fmt.Sprintf("Do post-check for pod %v in namespace %v", pod.Name, pod.Namespace), pod)
 	ctrl.log("syncHandler", fmt.Sprintf("Update tag for pod %v in namespace %v", pod.Name, pod.Namespace), pod)
+
+	// simulate the post check fail
+	_, failed := pod.Annotations["PostCheckFail"]
+	if failed {
+		ctrl.log("syncHandler", fmt.Sprintf("Post-check is failed for pod %v in namespace %v", pod.Name, pod.Namespace), pod)
+		err = ctrl.pauseDeployment(pod)
+		if err != nil {
+			ctrl.log("syncHandler", fmt.Sprintf("Failed to pause deployment for pod %v in namespace %v", pod.Name, pod.Namespace), pod)
+		} else {
+			ctrl.podQueue.Forget(key)
+			return nil
+		}
+	}
+
 	podCopy := pod.DeepCopy()
 	podCopy.Annotations["PostCheckDone"] = "true"
 	err = ctrl.patchPod(pod, podCopy)
@@ -194,6 +227,94 @@ func (ctrl *SonicDeamonsetController) patchPod(old, new *v1.Pod) error {
 	return nil
 }
 
+// Pause depoloyment when post check is failed
+func (ctrl *SonicDeamonsetController) pauseDeployment(pod *v1.Pod) error {
+	if pod == nil {
+		return fmt.Errorf("Pod is invalid")
+	}
+
+	var refs []string
+	var deploymentStr string
+	for _, ownerRef := range pod.OwnerReferences {
+		refs = append(refs, fmt.Sprintf("%s/%s", pod.Namespace, ownerRef.Name))
+		deploymentStr = ownerRef.Name
+	}
+
+	// get deployment from pod OwnerReferences
+	splitStr := strings.Split(deploymentStr, "-")
+	deploymentName := strings.Join(splitStr[0:len(splitStr)-2], "-")
+	d, err := ctrl.kubeClient.AppsV1().Deployments(pod.Namespace).Get(context.TODO(), deploymentName, metav1.GetOptions{})
+	if err != nil {
+		klog.ErrorS(err, fmt.Sprintf("deployment %v is not found", deploymentName))
+		return err
+	}
+
+	ctrl.log("getDeploymentForPod", fmt.Sprintf("pod %v is controlled by deployment %v", pod.Name, klog.KObj(d)), pod)
+	cond := ctrl.getDeploymentCondition(d.Status, appsv1.DeploymentProgressing)
+	pausedCondExists := cond != nil && cond.Reason == PausedDeployReason
+
+	if !pausedCondExists {
+		condition := ctrl.newDeploymentCondition(appsv1.DeploymentProgressing, v1.ConditionUnknown, PausedDeployReason, "Deployment is paused")
+		ctrl.setDeploymentCondition(&d.Status, *condition)
+	} else {
+		return nil
+	}
+
+	ctrl.log("getDeploymentForPod", fmt.Sprintf("Pause the deployment %v, %v", d.Name, klog.KObj(d)), pod)
+	_, err = ctrl.kubeClient.AppsV1().Deployments(d.Namespace).UpdateStatus(context.TODO(), d, metav1.UpdateOptions{})
+	return err
+}
+
 func (ctrl *SonicDeamonsetController) log(method, msg string, pod *v1.Pod) {
 	klog.ErrorS(nil, msg+" pod: ", klog.KObj(pod))
+}
+
+// NewDeploymentCondition creates a new deployment condition.
+func (ctrl *SonicDeamonsetController) newDeploymentCondition(condType appsv1.DeploymentConditionType, status v1.ConditionStatus, reason, message string) *appsv1.DeploymentCondition {
+	return &appsv1.DeploymentCondition{
+		Type:               condType,
+		Status:             status,
+		LastUpdateTime:     metav1.Now(),
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+}
+
+// GetDeploymentCondition returns the condition with the provided type.
+func (ctrl *SonicDeamonsetController) getDeploymentCondition(status appsv1.DeploymentStatus, condType appsv1.DeploymentConditionType) *appsv1.DeploymentCondition {
+	for i := range status.Conditions {
+		c := status.Conditions[i]
+		if c.Type == condType {
+			return &c
+		}
+	}
+	return nil
+}
+
+// SetDeploymentCondition updates the deployment to include the provided condition. If the condition that
+// we are about to add already exists and has the same status and reason then we are not going to update.
+func (ctrl *SonicDeamonsetController) setDeploymentCondition(status *appsv1.DeploymentStatus, condition appsv1.DeploymentCondition) {
+	currentCond := ctrl.getDeploymentCondition(*status, condition.Type)
+	if currentCond != nil && currentCond.Status == condition.Status && currentCond.Reason == condition.Reason {
+		return
+	}
+	// Do not update lastTransitionTime if the status of the condition doesn't change.
+	if currentCond != nil && currentCond.Status == condition.Status {
+		condition.LastTransitionTime = currentCond.LastTransitionTime
+	}
+	newConditions := ctrl.filterOutCondition(status.Conditions, condition.Type)
+	status.Conditions = append(newConditions, condition)
+}
+
+// filterOutCondition returns a new slice of deployment conditions without conditions with the provided type.
+func (ctrl *SonicDeamonsetController) filterOutCondition(conditions []appsv1.DeploymentCondition, condType appsv1.DeploymentConditionType) []appsv1.DeploymentCondition {
+	var newConditions []appsv1.DeploymentCondition
+	for _, c := range conditions {
+		if c.Type == condType {
+			continue
+		}
+		newConditions = append(newConditions, c)
+	}
+	return newConditions
 }

@@ -71,9 +71,10 @@ func Run(s *ServerRunOptions) error {
 
 	coreInformerFactory := informers.NewSharedInformerFactory(kubeClient, 0)
 	podInformer := coreInformerFactory.Core().V1().Pods()
+	dpInformer := coreInformerFactory.Apps().V1().Deployments()
 	pgCtrl := controller.NewPodGroupController(kubeClient, pgInformer, podInformer, schedClient)
 	eqCtrl := controller.NewElasticQuotaController(kubeClient, eqInformer, podInformer, schedClient)
-	sonicCtrl := controller.NewSonicDeamonsetController(kubeClient, podInformer)
+	sonicCtrl := controller.NewSonicDeamonsetController(kubeClient, podInformer, dpInformer)
 
 	run := func(ctx context.Context) {
 		go pgCtrl.Run(s.Workers, ctx.Done())
