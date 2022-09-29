@@ -73,10 +73,12 @@ func Run(s *ServerRunOptions) error {
 	podInformer := coreInformerFactory.Core().V1().Pods()
 	pgCtrl := controller.NewPodGroupController(kubeClient, pgInformer, podInformer, schedClient)
 	eqCtrl := controller.NewElasticQuotaController(kubeClient, eqInformer, podInformer, schedClient)
+	sonicCtrl := controller.NewSonicDeamonsetController(kubeClient, podInformer)
 
 	run := func(ctx context.Context) {
 		go pgCtrl.Run(s.Workers, ctx.Done())
 		go eqCtrl.Run(s.Workers, ctx.Done())
+		go sonicCtrl.Run(s.Workers, ctx.Done())
 		select {}
 	}
 	schedInformerFactory.Start(stopCh)
