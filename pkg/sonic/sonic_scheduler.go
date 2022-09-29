@@ -23,6 +23,7 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -165,6 +166,14 @@ func (ss *SonicScheduling) PreBind(ctx context.Context, state *framework.CycleSt
 // PostBind is called after a pod is successfully bound.
 func (ss *SonicScheduling) PostBind(ctx context.Context, _ *framework.CycleState, pod *v1.Pod, nodeName string) {
 	ss.log("PostBind", "pod post-upgrade: release device lock", pod, nodeName)
+	// add tag in annotations
+	podCopy := pod.DeepCopy()
+	podCopy.Annotations["PostCheckNeeded"] = "true"
+	ss.log("PostBind", "add PostCheckNeeded tag", pod, nodeName)
+	ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Update(ctx, podCopy, metav1.UpdateOptions{})
+
+	// try to emit an event
+	ss.frameworkHandler.EventRecorder().Eventf(podCopy, nil, v1.EventTypeNormal, "reason=test", "action=test", "note=test")
 }
 
 func (ss *SonicScheduling) log(method, msg string, pod *v1.Pod, nodeName string) {
