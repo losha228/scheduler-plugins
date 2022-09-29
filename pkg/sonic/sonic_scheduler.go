@@ -25,8 +25,10 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"sigs.k8s.io/scheduler-plugins/pkg/util"
 )
 
 // SonicScheduling is a plugin that inject sonice device precheck/postcheck and device lock logic during creating pod.
@@ -168,16 +170,19 @@ func (ss *SonicScheduling) PostBind(ctx context.Context, _ *framework.CycleState
 	ss.log("PostBind", "pod post-upgrade: release device lock", pod, nodeName)
 
 	// add tag in annotations
-	newPod, err := ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
-	if err != nil {
-		ss.log("PostBind", fmt.Sprintf("Node %v not found, error: %v", pod.Name, err), pod, nodeName)
-		return
-	}
-
+	/*
+		newPod, err := ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		if err != nil {
+			ss.log("PostBind", fmt.Sprintf("Node %v not found, error: %v", pod.Name, err), pod, nodeName)
+			return
+		}
+	*/
 	// update annotations
+	newPod := pod.DeepCopy()
 	newPod.Annotations["PostCheckNeeded"] = "true"
 	ss.log("PostBind", fmt.Sprintf("Add PostCheckNeeded tag for pod %v, uid: %v", newPod.Name, newPod.UID), newPod, nodeName)
-	_, err = ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Update(ctx, newPod, metav1.UpdateOptions{})
+	patch, err := util.CreateMergePatch(pod, newPod)
+	_, err = ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Patch(ctx, newPod.Name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		ss.log("PostBind", fmt.Sprintf("Failed to add PostCheckNeeded tag for pod %v, error: %v", newPod.Name, err), pod, nodeName)
 	}
