@@ -39,6 +39,7 @@ type SonicScheduling struct {
 }
 
 var _ framework.PreFilterPlugin = &SonicScheduling{}
+var _ framework.FilterPlugin = &SonicScheduling{}
 var _ framework.PostFilterPlugin = &SonicScheduling{}
 var _ framework.PermitPlugin = &SonicScheduling{}
 var _ framework.ReservePlugin = &SonicScheduling{}
@@ -98,6 +99,38 @@ func (ss *SonicScheduling) PreFilter(ctx context.Context, state *framework.Cycle
 	}
 
 	return nil, framework.NewStatus(framework.Success, "")
+}
+
+// These Filter is used to filter out nodes that cannot run the Pod. For each node, the scheduler will call filter plugins in their configured order.
+// If any filter plugin marks the node as infeasible, the remaining plugins will not be called for that node.
+func (ss *SonicScheduling) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+	// If PreFilter fails, return framework.UnschedulableAndUnresolvable to avoid
+	// any preemption attempts.
+
+	nodeName := nodeInfo.Node().Name
+	ss.log("Filter", "Filter is called", pod, nodeName)
+	value := GetAnnotationByName(pod, "Filter")
+	if value == "" {
+		ss.log("Filter", "no filter key, will skip", pod, nodeName)
+		return framework.NewStatus(framework.Success, "")
+	}
+
+	// format:  node1_node2_nodeN
+	nodeTokenStr := strings.Split(value, "_")
+	if len(nodeTokenStr) < 2 {
+		ss.log("Filter", "no filter key, will skip", pod, nodeName)
+		return framework.NewStatus(framework.Success, "")
+	}
+
+	for _, nodeToFail := range nodeTokenStr {
+		ss.log("Filter", fmt.Sprintf("compare failNode: %v and acutalNode %v", nodeToFail, nodeName), pod, nodeName)
+		if strings.EqualFold(nodeToFail, nodeName) {
+			ss.log("Filter", "set it to Unschedulable", pod, nodeName)
+			return framework.NewStatus(framework.UnschedulableAndUnresolvable, fmt.Sprintf("%v is rejected due to policy", nodeName))
+		}
+	}
+
+	return framework.NewStatus(framework.Success, "")
 }
 
 // PostFilter is used to reject pods if a pod does not pass PreFilter or Filter.
