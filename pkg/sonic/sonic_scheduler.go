@@ -215,6 +215,7 @@ func (ss *SonicScheduling) PostBind(ctx context.Context, _ *framework.CycleState
 	// update annotations
 	newPod := pod.DeepCopy()
 	newPod.Annotations[PostCheckNeededTag] = "true"
+	newPod.Annotations["LastGoodVersion"] = "true"
 	ss.log("PostBind", fmt.Sprintf("Add PostCheckNeeded tag for pod %v, uid: %v", newPod.Name, newPod.UID), newPod, nodeName)
 	patch, err := util.CreateMergePatch(pod, newPod)
 	_, err = ss.frameworkHandler.ClientSet().CoreV1().Pods(pod.Namespace).Patch(ctx, newPod.Name, types.MergePatchType, patch, metav1.PatchOptions{})
