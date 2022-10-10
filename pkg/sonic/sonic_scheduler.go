@@ -117,7 +117,7 @@ func (ss *SonicScheduling) Filter(ctx context.Context, state *framework.CycleSta
 
 	// format:  node1_node2_nodeN
 	nodeTokenStr := strings.Split(value, "_")
-	if len(nodeTokenStr) < 2 {
+	if len(nodeTokenStr) < 1 {
 		ss.log("Filter", "no filter key, will skip", pod, nodeName)
 		return framework.NewStatus(framework.Success, "")
 	}
